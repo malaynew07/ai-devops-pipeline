@@ -41,25 +41,27 @@ pipeline {
         failure {
             echo "❌ Pipeline failed! Waking up the AI DevOps Agent..."
             script {
-                // IMPORTANT: Ensure you approved 'getRawBuild' in Manage Jenkins!
+                // 1. Grab the logs and save to a file
                 def logContent = currentBuild.rawBuild.getLog(50).join('\n')
                 writeFile file: 'error_log.txt', text: logContent
 
+                // 2. Run the entire AI Logic in ONE shell execution
                 sh """
                 #!/bin/bash
+                # Define the prompt using the file we just wrote
                 PROMPT="Act as a Senior DevOps Engineer. The Jenkins pipeline just failed. Analyze these logs, identify the root cause, and give a 3-step fix. Logs: \$(cat error_log.txt)"
-                JSON_PAYLOAD=\$(jq -n --arg text "\$PROMPT" '{contents: [{parts: [{"text": \$text}]}]}')
+                
+                # Create the JSON (Shell variable, no Groovy interference)
+                PAYLOAD=\$(jq -n --arg text "\$PROMPT" '{contents: [{parts: [{"text": \$text}]}]}')
+                
+                # Call the API
                 RESPONSE=\$(curl -s -X POST "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}" \
                     -H 'Content-Type: application/json' \
-                    -d "$JSON_PAYLOAD")
+                    -d "\$PAYLOAD")
+                
                 echo -e "\\n================ AI DIAGNOSIS & REMEDIATION ================\\n"
                 echo "\$RESPONSE" | jq -r '.candidates[0].content.parts[0].text'
                 echo -e "\\n============================================================\\n"
                 """
             }
         }
-        success {
-            echo "🎉 Pipeline completed successfully! The AI Agent is resting."
-        }
-    }
-}
