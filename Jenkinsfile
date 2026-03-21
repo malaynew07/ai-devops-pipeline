@@ -37,20 +37,21 @@ pipeline {
         failure {
             echo "❌ Pipeline failed! Waking up the AI DevOps Agent..."
             script {
-                // 1. Grab logs
+                // 1. Grab logs using Groovy
                 def logContent = currentBuild.rawBuild.getLog(50).join('\n')
                 writeFile file: 'error_log.txt', text: logContent
 
-                // 2. Run AI Logic
+                // 2. Run AI Logic - Escaping dollar signs for Bash variables
                 sh """
                 #!/bin/bash
+                # Escape the $ signs so Groovy doesn't try to parse them
                 PROMPT="Act as a Senior DevOps Engineer. The Jenkins pipeline just failed. Analyze these logs, identify the root cause, and give a 3-step fix. Logs: \$(cat error_log.txt)"
                 
                 PAYLOAD=\$(jq -n --arg text "\$PROMPT" '{contents: [{parts: [{"text": \$text}]}]}')
                 
-                RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}" \
-    -H 'Content-Type: application/json' \
-    -d "$PAYLOAD")
+                RESPONSE=\$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}" \
+                    -H 'Content-Type: application/json' \
+                    -d "\$PAYLOAD")
                 
                 echo -e "\\n================ AI DIAGNOSIS & REMEDIATION ================\\n"
                 echo "\$RESPONSE" | jq -r '.candidates[0].content.parts[0].text'
