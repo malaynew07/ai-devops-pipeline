@@ -8,82 +8,55 @@ pipeline {
     }
 
     stages {
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
                 checkout scm
-                echo "✅ Code pulled successfully from Git."
             }
         }
 
-        stage('Build & Push Docker Image') {
+        stage('Build & Push Image') {
             steps {
                 sh "echo \$DOCKERHUB_CREDS_PSW | docker login -u \$DOCKERHUB_CREDS_USR --password-stdin"
                 sh "docker build -t ${IMAGE_NAME}:latest -f docker/Dockerfile ."
                 sh "docker push ${IMAGE_NAME}:latest"
-                echo "✅ New image pushed to Docker Hub."
             }
         }
 
-        stage('Deploy to KIND Cluster') {
+        stage('Deploy to K8s') {
             steps {
                 sh "kubectl apply -f k8s/deployment.yaml"
                 sh "kubectl rollout restart deployment/web-app-deployment -n agentic-devops"
-                echo "✅ Deployment updated in KIND cluster."
             }
         }
     }
 
     post {
         failure {
-            echo "❌ Pipeline failed! Waking up the AI DevOps Agent..."
             script {
-                // 1. Capture the last 50 lines of logs using Groovy
-                def logContent = currentBuild.rawBuild.getLog(50).join('\n')
-                writeFile file: 'error_log.txt', text: logContent
+                // 1. Get the last 50 lines of the error log
+                def logs = currentBuild.rawBuild.getLog(50).join('\n').replace('"', '').replace('\\', '')
+                
+                echo "❌ Build Failed. Asking AI for the solution..."
 
-                // 2. The AI Logic - Using Shell for API interaction
+                // 2. Simple, Direct AI Analysis
                 sh """
-                #!/bin/bash
-                # Clean logs: remove double quotes and backslashes
-                CLEAN_LOGS=\$(cat error_log.txt | tr -d '"' | tr -d '\\\\')
+                curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${GEMINI_API_KEY}" \
+                    -H 'Content-Type: application/json' \
+                    -d '{
+                      "contents": [{
+                        "parts":[{"text": "Act as a DevOps Expert. Analyze these logs and provide a clear 3-step fix only: ${logs}"}]
+                      }]
+                    }' > ai_response.json
 
-                # Create the JSON payload file
-                cat <<EOF > payload.json
-{
-  "contents": [
-    {
-      "parts": [
-        {
-          "text": "Act as a Senior DevOps Engineer. The Jenkins pipeline failed. Analyze these logs and give a 3-step fix: \$CLEAN_LOGS"
-        }
-      ]
-    }
-  ]
-}
-EOF
-
-                # 3. Call the Gemini 3.1 API
-                RESPONSE=\$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${GEMINI_API_KEY}" \\
-                    -H 'Content-Type: application/json' \\
-                    -d @payload.json)
-
-                echo -e "\\n================ AI DIAGNOSIS & REMEDIATION ================\\n"
-
-                # Check for errors and clean up control characters before parsing with jq
-                if echo "\$RESPONSE" | jq -e '.error' > /dev/null; then
-                    echo "AI Agent Error Details:"
-                    echo "\$RESPONSE" | jq .
-                else
-                    # Clean the response string of invalid control characters so jq doesn't crash
-                    echo "\$RESPONSE" | sed 's/[[:cntrl:]]//g' | jq -r '.candidates[0].content.parts[0].text'
-                fi
-
-                echo -e "\\n============================================================\\n"
+                echo -e "\\n--- AI FIX STEPS ---"
+                # This Python line safely prints the AI's solution
+                python3 -c "import json, sys; print(json.load(open('ai_response.json'))['candidates'][0]['content']['parts'][0]['text'])"
+                echo -e "----------------------\\n"
                 """
             }
         }
         success {
-            echo "🎉 Pipeline completed successfully! The AI Agent is resting."
+            echo "✅ Success! Application is live."
         }
     }
 }
