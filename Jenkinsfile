@@ -37,24 +37,47 @@ pipeline {
         failure {
             echo "❌ Pipeline failed! Waking up the AI DevOps Agent..."
             script {
-                // 1. Grab logs using Groovy
+                // 1. Capture the last 50 lines of logs using Groovy
                 def logContent = currentBuild.rawBuild.getLog(50).join('\n')
                 writeFile file: 'error_log.txt', text: logContent
 
-                // 2. Run AI Logic - Escaping dollar signs for Bash variables
+                // 2. The AI Logic - Using Shell for API interaction
                 sh """
                 #!/bin/bash
-                # Escape the $ signs so Groovy doesn't try to parse them
-                PROMPT="Act as a Senior DevOps Engineer. The Jenkins pipeline just failed. Analyze these logs, identify the root cause, and give a 3-step fix. Logs: \$(cat error_log.txt)"
-                
-                PAYLOAD=\$(jq -n --arg text "\$PROMPT" '{contents: [{parts: [{"text": \$text}]}]}')
-                
-                RESPONSE=\$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}" \
-                    -H 'Content-Type: application/json' \
-                    -d "\$PAYLOAD")
-                
+                # Clean logs: remove double quotes and backslashes so JSON stays valid
+                CLEAN_LOGS=\$(cat error_log.txt | tr -d '"' | tr -d '\\\\')
+
+                # Create the JSON payload file
+                cat <<EOF > payload.json
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "Act as a Senior DevOps Engineer. The Jenkins pipeline failed. Analyze these logs and give a 3-step fix: \$CLEAN_LOGS"
+        }
+      ]
+    }
+  ]
+}
+EOF
+
+                # 3. Call the API using the exact model from your list (Gemini 3.1)
+                RESPONSE=\$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${GEMINI_API_KEY}" \\
+                    -H 'Content-Type: application/json' \\
+                    -d @payload.json)
+
                 echo -e "\\n================ AI DIAGNOSIS & REMEDIATION ================\\n"
-                echo "\$RESPONSE" | jq -r '.candidates[0].content.parts[0].text'
+
+                # Check if the response contains an error
+                if echo "\$RESPONSE" | jq -e '.error' > /dev/null; then
+                    echo "AI Agent Error Details:"
+                    echo "\$RESPONSE" | jq .
+                else
+                    # Successfully extract the text
+                    echo "\$RESPONSE" | jq -r '.candidates[0].content.parts[0].text'
+                fi
+
                 echo -e "\\n============================================================\\n"
                 """
             }
